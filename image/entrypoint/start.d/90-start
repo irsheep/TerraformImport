@@ -1,0 +1,5 @@
+#!/bin/sh
+
+echo 90-start >> /tmp/log
+
+tail -f /dev/null & echo $! > /tmp/process.pid

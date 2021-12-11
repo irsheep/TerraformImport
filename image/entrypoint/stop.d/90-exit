@@ -1,0 +1,8 @@
+#!/bin/sh
+
+# Signals
+# https://man7.org/linux/man-pages/man7/signal.7.html
+# SIGKILL 9
+# SIGTERM 15
+
+PID_FILE=/tmp/process.pid && [ -f ${PID_FILE} ] && kill -15 `cat ${PID_FILE}`
