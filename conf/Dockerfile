@@ -4,9 +4,10 @@ FROM python:3.11.0a3-bullseye
 COPY image/entrypoint /opt/entrypoint
 RUN chmod 755 -R /opt/entrypoint/*
 
+# Install python requirements
 WORKDIR /opt/terraformimport
-# COPY requirements.txt ./
-# RUN pip install --no-cache-dir -r requirements.txt
+COPY image/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Container entrypoint
 ENTRYPOINT [ "/opt/entrypoint/entrypoint.sh" ]
