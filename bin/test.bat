@@ -13,6 +13,7 @@ docker run ^
 -it ^
 --rm ^
 -v %cd%\src:/opt/terraformimport ^
+-v %cd%\volumes\app:/opt/terraformimport/app ^
 -v %cd%\volumes\data:/opt/terraformimport/data ^
 --name %CONTAINER_NAME%-test ^
 %IMAGE_SOURCE%:%IMAGE_TAG% /bin/bash

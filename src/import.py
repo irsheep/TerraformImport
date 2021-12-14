@@ -3,6 +3,7 @@
 import json
 import argparse
 import configparser
+from json.encoder import JSONEncoder
 import re
 from jsonpath_ng import jsonpath, parse
 
@@ -28,6 +29,27 @@ PROVIDER_RESOURCE_TYPE = ""
 PROVIDER_RESOURCE_ID_KEY = ""
 # Dot path to the resource name
 PROVIDER_RESOURCE_NAME_KEY = ""
+
+"""
+   Class: TerraformEncoder
+
+   Description: Converts a JSON object (dict) to Terraform syntax
+     Invoke as ```json.dumps(myJsonObject, cls=TerraformEncoder)```.
+"""
+class TerraformEncoder(json.JSONEncoder):
+  def default(self, jsonString):
+    return jsonString
+  def encode(self, jsonObject):
+    self.indent=2
+    self.key_separator = " = "
+    self.item_separator = ""
+    terraformObjectString:str = ""
+    jsonEncodedString = json.JSONEncoder.encode(self, jsonObject)
+    regex = re.compile(r"\"(.+)\"\s+\=\s(.*)")
+    for line in jsonEncodedString.split("\n"):
+      line = regex.sub(r"\g<1> = \g<2>", line)
+      terraformObjectString = f"{terraformObjectString}{line}\n"
+    return terraformObjectString.rstrip("\n")
 
 """
   Function: LoadJsonFile
@@ -186,7 +208,7 @@ def CastValueToTerraformType(value):
   if value == None: return "null"
   if isinstance(value, bool): return f"{str(value).lower()}"
   if isinstance(value, int): return int(value)
-  return f'"{value}"'
+  return value
 
 """
   Function: ImportFromTfState
@@ -199,23 +221,24 @@ def ImportFromTfState():
   importData = LoadTextFile(TERRAFORM_SKELETON_TF_FILE)
   mappings = LoadJsonFile(TERRAFORM_MAPPING_FILE)
   terraformResourceData = ""
+  tfstateJsonData = {}
   for line in importData.split("\n"):
     if line != "":
       [ a, resourceType, resourceName, d] = line.replace('"',"").split()
       tfstateInstanceAttributes = FindResourceInstancesFromTfstate(terraformStateData, resourceType, resourceName)
-      terraformResourceData = f'{terraformResourceData}resource "{resourceType}" "{resourceName}" {{'
+      terraformResourceData = f'{terraformResourceData}resource "{resourceType}" "{resourceName}" '
       if tfstateInstanceAttributes:
         for key in mappings[resourceType]:
-          terraformResourceData = f'{terraformResourceData}\n  {key} = {CastValueToTerraformType(tfstateInstanceAttributes[key])}'
-        terraformResourceData = f'{terraformResourceData}\n'
-      terraformResourceData = f'{terraformResourceData}}}\n\n'
+            tfstateJsonData[key] = CastValueToTerraformType(tfstateInstanceAttributes[key])
+        terraformResourceData = f'{terraformResourceData}{json.dumps(tfstateJsonData, cls=TerraformEncoder)}'
+      terraformResourceData = f'{terraformResourceData} \n\n'
+
   WriteTextToFile(TERRAFORM_RESOURCE_TF_FILE, terraformResourceData)
 
 """
   Function: LoadConfig
 
   Description: Loads the configuration from 'settings.cgf'.
-
 """
 def LoadConfig(provider):
   global JSON_DATA_FILE
