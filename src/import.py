@@ -1,6 +1,10 @@
+#!/usr/bin/env python
+
 import json
 import argparse
 import configparser
+import re
+from jsonpath_ng import jsonpath, parse
 
 # JSON data exported from the provider, for the resources to import
 JSON_DATA_FILE = ""
@@ -16,8 +20,12 @@ TERRAFORM_STATE_FILE = ""
 TERRAFORM_MAPPING_FILE = ""
 # Terraform provider resource type
 TERRAFORM_RESOURCE_TYPE = ""
+#
+PROVIDER_RESOURCE_ROOT = ""
 # Provider resource filter
 PROVIDER_RESOURCE_TYPE = ""
+#
+PROVIDER_RESOURCE_ID_KEY = ""
 # Dot path to the resource name
 PROVIDER_RESOURCE_NAME_KEY = ""
 
@@ -80,52 +88,68 @@ def WriteTextToFile(filename, data):
     fileHandle.write(data)
 
 """
-  Function: GetDictValueFromDotKeyPath
-
-  Description: Gets the value from a property in a Dict by refering to it by its dot path.
-
-  Parameters:
-    - object: Path and name of the file to write to
-    - dotKeyPath: Text string with the dot path to the property. Ex.: resource.properties.name
-
-  Return: The value associated with the property, if found.
-"""
-def GetDictValueFromDotKeyPath(object, dotKeyPath):
-  if isinstance(object, str): return object
-  if isinstance(dotKeyPath, str): dotKeyPath = dotKeyPath.split(".")
-  if dotKeyPath is None: return 1
-  if len(dotKeyPath) == 0: return 2
-  if len(dotKeyPath) == 1:
-    if isinstance(dotKeyPath, str):
-      return 6
-  if dotKeyPath[0] in object.keys():
-    if len(dotKeyPath) == 1: return object[dotKeyPath[0]]
-    key = dotKeyPath[0]
-    dotKeyPath.pop(0)
-    return GetDictValueFromDotKeyPath(object[key], dotKeyPath)
-  else:
-    return 3
-
-"""
-  Function: CreateImportFiles
+  Function: CreateAzureImportFiles
 
   Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
     the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
     imported.
-
 """
-def CreateImportFiles():
+def CreateAzureImportFiles():
   data = LoadJsonFile(JSON_DATA_FILE)
   importData=[]
   terraformData=[]
   for resource in data:
     if PROVIDER_RESOURCE_TYPE in resource['name']:
-      TF_RESOURCE_NAME=GetDictValueFromDotKeyPath(resource, PROVIDER_RESOURCE_NAME_KEY)
+      if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
+        [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
+        TF_RESOURCE_NAME=GetValueFromKey(GetResourceValueByKeyPath(resource, f"$..{jsonPath}" ), keyName)
+      else:
+        TF_RESOURCE_NAME=GetResourceValueByKeyPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
       PROVIDER_RESOURCE_ID=resource['id']
       importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
       terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
   WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
   WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
+
+"""
+  Function: CreateAwsImportFiles
+
+  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
+    the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
+    imported.
+
+  TODO
+    - move JSON_DATA_FILE to cmd argument, 
+    - Changed the code to allow multiple providers. Swiched to a more robust lib to handle json dot paths.
+"""
+def CreateAwsImportFiles():
+  # data = LoadJsonFile(JSON_DATA_FILE)
+  data = LoadJsonFile("data/provider_aws_ec2.json")
+  # data = LoadJsonFile("data/provider_aws_efs.json")
+  importData=[]
+  terraformData=[]
+  for resource in data[PROVIDER_RESOURCE_ROOT]:
+    if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
+      [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
+      TF_RESOURCE_NAME=GetValueFromKey(GetResourceValueByKeyPath(resource, f"$..{jsonPath}" ), keyName)
+    else:
+      TF_RESOURCE_NAME=GetResourceValueByKeyPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
+    PROVIDER_RESOURCE_ID=GetResourceValueByKeyPath(resource, f"$..{PROVIDER_RESOURCE_ID_KEY}")
+    importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
+    terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
+  WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
+  WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
+
+def GetValueFromKey(kvpData, keyName):
+  for keyvp in kvpData:
+    if keyvp['Key'] == keyName:
+      return keyvp['Value']
+  return False
+
+def GetResourceValueByKeyPath(jsonObject, pathToKey):
+  jsonPathParser = parse(pathToKey)
+  matches = jsonPathParser.find(jsonObject)
+  return matches[0].value
 
 """
   Function: FindResourceInstancesFromTfstate
@@ -193,20 +217,28 @@ def ImportFromTfState():
   Description: Loads the configuration from 'settings.cgf'.
 
 """
-def LoadConfig():
+def LoadConfig(provider):
   global JSON_DATA_FILE
   global TERRAFORM_IMPORT_SCRIPT
   global TERRAFORM_SKELETON_TF_FILE
   global TERRAFORM_RESOURCE_TYPE
   global TERRAFORM_STATE_FILE
   global TERRAFORM_MAPPING_FILE
+  global PROVIDER_RESOURCE_ROOT
   global PROVIDER_RESOURCE_TYPE
+  global PROVIDER_RESOURCE_ID_KEY
   global PROVIDER_RESOURCE_NAME_KEY
 
   cfg = configparser.RawConfigParser()
   cfg.optionxform = lambda option: option # Prevent config parser from changing the CASE of variable names
   cfg.read('settings.cfg')
+  # Common settings
   settings=dict(cfg.items("Settings"))
+  for setting in settings:
+    settings[setting]=settings[setting].split("#",1)[0].strip() # To get rid of inline comments
+  globals().update(settings)  # Make them availible globally
+  # Define settings from the provider settings section
+  settings=dict(cfg.items(provider))
   for setting in settings:
     settings[setting]=settings[setting].split("#",1)[0].strip() # To get rid of inline comments
   globals().update(settings)  # Make them availible globally
@@ -219,17 +251,22 @@ def LoadConfig():
 
 """
 def main():
-  LoadConfig()
-
   parser = argparse.ArgumentParser(description='Import existing provider resources to Terraform')
+  parser.add_argument("-p", "--provider", choices=["aws", "azure", "gcp", "digitalocean"], required=True, help="")
   group = parser.add_mutually_exclusive_group()
   group.add_argument("-c", "--create", action="store_true", help="Create 'terraform import' script and file for resources")
   group.add_argument("-m", "--merge", action="store_true", help=f"Merge properties from terraform state file to '{TERRAFORM_RESOURCE_TF_FILE}'")
 
   args = parser.parse_args()
 
+  if args.provider:
+    LoadConfig(args.provider)
   if args.create:
-    CreateImportFiles()
+    match args.provider:
+      case "aws":
+        CreateAwsImportFiles()
+      case "azure":
+        return CreateAzureImportFiles()
   elif args.merge:
     ImportFromTfState()
   else:

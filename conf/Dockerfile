@@ -4,6 +4,9 @@ FROM python:3.11.0a3-bullseye
 COPY image/entrypoint /opt/entrypoint
 RUN chmod 755 -R /opt/entrypoint/*
 
+RUN useradd -m python
+USER python
+
 # Install python requirements
 WORKDIR /opt/terraformimport
 COPY image/requirements.txt ./
