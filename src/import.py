@@ -36,7 +36,7 @@ PROVIDER_RESOURCE_NAME_KEY = ""
    Description: Converts a JSON object (dict) to Terraform syntax
      Invoke as ```json.dumps(myJsonObject, cls=TerraformEncoder)```.
 """
-class TerraformEncoder(json.JSONEncoder):
+class TerraformHclEncoder(json.JSONEncoder):
   def default(self, jsonString):
     return jsonString
   def encode(self, jsonObject):
@@ -44,11 +44,14 @@ class TerraformEncoder(json.JSONEncoder):
     self.key_separator = " = "
     self.item_separator = ""
     terraformObjectString:str = ""
+    hclListSeperator=""
     jsonEncodedString = json.JSONEncoder.encode(self, jsonObject)
     regex = re.compile(r"\"(.+)\"\s+\=\s(.*)")
     for line in jsonEncodedString.split("\n"):
+      if re.findall(r"^\s+\"\w+\"$", line): hclListSeperator=","
+      if re.findall(r"^\s+\]$", line): hclListSeperator=""
       line = regex.sub(r"\g<1> = \g<2>", line)
-      terraformObjectString = f"{terraformObjectString}{line}\n"
+      terraformObjectString = f"{terraformObjectString}{line}{hclListSeperator}\n"
     return terraformObjectString.rstrip("\n")
 
 """
@@ -229,7 +232,7 @@ def ImportFromTfState():
             tfstateJsonData = GetObjectDataFromTfstate(tfstateInstanceAttributes, key, data=tfstateJsonData)
           else:
             tfstateJsonData[key] = CastValueToTerraformType(tfstateInstanceAttributes[key])
-        terraformResourceData = f'{terraformResourceData}{json.dumps(tfstateJsonData, cls=TerraformEncoder)}'
+        terraformResourceData = f'{terraformResourceData}{json.dumps(tfstateJsonData, cls=TerraformHclEncoder)}'
       terraformResourceData = f'{terraformResourceData} \n\n'
   WriteTextToFile(TERRAFORM_RESOURCE_TF_FILE, terraformResourceData)
 
