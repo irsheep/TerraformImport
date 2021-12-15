@@ -8,27 +8,29 @@ import re
 from jsonpath_ng import jsonpath, parse
 
 # JSON data exported from the provider, for the resources to import
-JSON_DATA_FILE = ""
+JSON_DATA_FILE = None
 # Output script for 'terraform import'
-TERRAFORM_IMPORT_SCRIPT = ""
+TERRAFORM_IMPORT_SCRIPT = None
 # Skeleton .tf file for the imported resources
-TERRAFORM_SKELETON_TF_FILE = ""
+TERRAFORM_SKELETON_TF_FILE = None
 # Final terraform file with full imported resources
-TERRAFORM_RESOURCE_TF_FILE = ""
+TERRAFORM_RESOURCE_TF_FILE = None
 # Terraform state file, this can be the latest copy
-TERRAFORM_STATE_FILE = ""
+TERRAFORM_STATE_FILE = None
 # JSON file with attrubites per resource to import to TERRAROFM_RESOURCE_TF_FILE
-TERRAFORM_MAPPING_FILE = ""
+TERRAFORM_MAPPING_FILE = None
 # Terraform provider resource type
-TERRAFORM_RESOURCE_TYPE = ""
-#
-PROVIDER_RESOURCE_ROOT = ""
-# Provider resource filter
-PROVIDER_RESOURCE_TYPE = ""
-#
-PROVIDER_RESOURCE_ID_KEY = ""
+TERRAFORM_RESOURCE_TYPE = None
+# The name of the key that contains the list of resources
+PROVIDER_RESOURCE_ROOT = None
+# Provider resource filter, key name
+PROVIDER_RESOURCE_FILTER_KEY= None
+# Provider resource filter, filter value
+PROVIDER_RESOURCE_FILTER_VALUE = None
+# The name of the key where the resource id is stored by the provider
+PROVIDER_RESOURCE_ID_KEY = None
 # Dot path to the resource name
-PROVIDER_RESOURCE_NAME_KEY = ""
+PROVIDER_RESOURCE_NAME_KEY = None
 
 """
    Class: TerraformEncoder
@@ -111,6 +113,26 @@ def WriteArrayToFile(filename, data):
 def WriteTextToFile(filename, data):
   with open(filename, "w") as fileHandle:
     fileHandle.write(data)
+
+"""
+  Function: FilterResource
+
+  Description: Checks if a dictionary has a key with a value using a wildcard comparison.
+
+  Parameters:
+    - resource: Dictionary to look for the key and value
+
+  Return: True if the resource is found, False otherwise.
+"""
+def IncludeFilteredResource(resource:dict):
+  # If any of the required config settings isn't set, then don't filter anything
+  if PROVIDER_RESOURCE_FILTER_KEY == None or \
+    PROVIDER_RESOURCE_FILTER_VALUE == None: return True
+  # Get the value for the key
+  value = GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_FILTER_KEY}")
+  if re.findall(f".*{PROVIDER_RESOURCE_FILTER_VALUE}.*", value): return True
+  # Defaults to false
+  return False
 
 """
   Function: GetValueFromKey
@@ -243,49 +265,26 @@ def ImportFromTfState():
     the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
     imported.
 """
-def CreateAzureImportFiles():
+def CreateImportFiles():
   data = LoadJsonFile(JSON_DATA_FILE)
   importData=[]
   terraformData=[]
-  for resource in data:
-    if PROVIDER_RESOURCE_TYPE in resource['name']:
+
+  if PROVIDER_RESOURCE_ROOT == None:
+    resourcesData = data
+  else:
+    resourcesData = data[PROVIDER_RESOURCE_ROOT]
+
+  for resource in resourcesData:
+    if IncludeFilteredResource(resource):
       if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
         [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
         TF_RESOURCE_NAME=GetValueFromKey(GetJsonObjectValueByKeyDotPath(resource, f"$..{jsonPath}" ), keyName)
       else:
         TF_RESOURCE_NAME=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
-      PROVIDER_RESOURCE_ID=resource['id']
+      PROVIDER_RESOURCE_ID=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_ID_KEY}")
       importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
       terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
-  WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
-  WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
-
-"""
-  Function: CreateAwsImportFiles
-
-  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
-    the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
-    imported.
-
-  TODO
-    - move JSON_DATA_FILE to cmd argument, 
-    - Changed the code to allow multiple providers. Swiched to a more robust lib to handle json dot paths.
-"""
-def CreateAwsImportFiles():
-  # data = LoadJsonFile(JSON_DATA_FILE)
-  data = LoadJsonFile("data/provider_aws_ec2.json")
-  # data = LoadJsonFile("data/provider_aws_efs.json")
-  importData=[]
-  terraformData=[]
-  for resource in data[PROVIDER_RESOURCE_ROOT]:
-    if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
-      [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
-      TF_RESOURCE_NAME=GetValueFromKey(GetJsonObjectValueByKeyDotPath(resource, f"$..{jsonPath}" ), keyName)
-    else:
-      TF_RESOURCE_NAME=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
-    PROVIDER_RESOURCE_ID=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_ID_KEY}")
-    importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
-    terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
   WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
   WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
 
@@ -302,7 +301,8 @@ def LoadConfig(provider=None):
   global TERRAFORM_STATE_FILE
   global TERRAFORM_MAPPING_FILE
   global PROVIDER_RESOURCE_ROOT
-  global PROVIDER_RESOURCE_TYPE
+  global PROVIDER_RESOURCE_FILTER_KEY
+  global PROVIDER_RESOURCE_FILTER_VALUE
   global PROVIDER_RESOURCE_ID_KEY
   global PROVIDER_RESOURCE_NAME_KEY
 
@@ -319,21 +319,24 @@ def LoadConfig(provider=None):
   # Common settings
   settings=dict(cfg.items("Settings"))
   for setting in settings:
-    settings[setting]=settings[setting].split("#",1)[0].strip() # To get rid of inline comments
+    settings[setting]=SetSettingValue(settings[setting])
   globals().update(settings)  # Make them availible globally
   # Define settings from the provider settings section
   settings=dict(cfg.items(provider))
   for setting in settings:
-    settings[setting]=settings[setting].split("#",1)[0].strip() # To get rid of inline comments
+    settings[setting]=SetSettingValue(settings[setting])
   globals().update(settings)  # Make them availible globally
 
+def SetSettingValue(value:str):
+  parsedValue = value.split("#", 1)[0].strip() # Remove inline comments
+  if parsedValue == '""': return None
+  return parsedValue
 
 """
   Function: main
 
   Description: Loads the settings and checks the command line arguments. Deciding what functions to call
     based on the arguments.
-
 """
 def main():
 
@@ -351,11 +354,7 @@ def main():
   if args.provider:
     LoadConfig(args.provider)
   if args.create:
-    match args.provider:
-      case "aws":
-        CreateAwsImportFiles()
-      case "azure":
-        return CreateAzureImportFiles()
+    CreateImportFiles()
   elif args.merge:
     ImportFromTfState()
   else:
