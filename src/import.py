@@ -110,65 +110,34 @@ def WriteTextToFile(filename, data):
     fileHandle.write(data)
 
 """
-  Function: CreateAzureImportFiles
+  Function: GetValueFromKey
 
-  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
-    the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
-    imported.
+  Description: Get the value from a KVP object.
+
+  Parameters:
+    - kvpObject: A JSON object
+    - keyName: The name of the key in the object
+
+  Return: The value for the key or False if not found.
 """
-def CreateAzureImportFiles():
-  data = LoadJsonFile(JSON_DATA_FILE)
-  importData=[]
-  terraformData=[]
-  for resource in data:
-    if PROVIDER_RESOURCE_TYPE in resource['name']:
-      if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
-        [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
-        TF_RESOURCE_NAME=GetValueFromKey(GetResourceValueByKeyPath(resource, f"$..{jsonPath}" ), keyName)
-      else:
-        TF_RESOURCE_NAME=GetResourceValueByKeyPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
-      PROVIDER_RESOURCE_ID=resource['id']
-      importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
-      terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
-  WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
-  WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
-
-"""
-  Function: CreateAwsImportFiles
-
-  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
-    the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
-    imported.
-
-  TODO
-    - move JSON_DATA_FILE to cmd argument, 
-    - Changed the code to allow multiple providers. Swiched to a more robust lib to handle json dot paths.
-"""
-def CreateAwsImportFiles():
-  # data = LoadJsonFile(JSON_DATA_FILE)
-  data = LoadJsonFile("data/provider_aws_ec2.json")
-  # data = LoadJsonFile("data/provider_aws_efs.json")
-  importData=[]
-  terraformData=[]
-  for resource in data[PROVIDER_RESOURCE_ROOT]:
-    if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
-      [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
-      TF_RESOURCE_NAME=GetValueFromKey(GetResourceValueByKeyPath(resource, f"$..{jsonPath}" ), keyName)
-    else:
-      TF_RESOURCE_NAME=GetResourceValueByKeyPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
-    PROVIDER_RESOURCE_ID=GetResourceValueByKeyPath(resource, f"$..{PROVIDER_RESOURCE_ID_KEY}")
-    importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
-    terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
-  WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
-  WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
-
-def GetValueFromKey(kvpData, keyName):
-  for keyvp in kvpData:
-    if keyvp['Key'] == keyName:
-      return keyvp['Value']
+def GetValueFromKey(kvpObject, keyName):
+  for kvp in kvpObject:
+    if kvp['Key'] == keyName:
+      return kvp['Value']
   return False
 
-def GetResourceValueByKeyPath(jsonObject, pathToKey):
+"""
+  Function: GetJsonObjectValueByKeyDotPath
+
+  Description: Gets the values of the keys in the 'jsonObject'
+
+  Parameters:
+    - jsonObject: A JSON object
+    - keyDotPath: JSON dot path to key (a.b.c)
+
+  Return: The value for the key.
+"""
+def GetJsonObjectValueByKeyDotPath(jsonObject, pathToKey):
   jsonPathParser = parse(pathToKey)
   matches = jsonPathParser.find(jsonObject)
   return matches[0].value
@@ -186,12 +155,39 @@ def GetResourceValueByKeyPath(jsonObject, pathToKey):
 
   Return: The attributes of the resource, or FALSE if not found.
 """
-def FindResourceInstancesFromTfstate(tfState, type, name):
+def GetResourceInstancesFromTfstate(tfState, type, name):
   for resource in tfState['resources']:
     if resource['type'] == type and resource['name'] == name:
       # instances[0] is a terrible assumption
       return resource['instances'][0]['attributes']
   return False
+
+"""
+  Function: GetObjectDataFromTfstate
+
+  Description: Gets the values of the keys in the 'keysObject'
+
+  Parameters:
+    - tfstateObject: The Terraform state object to look the 'keysObject'
+    - keysObejct: JSON object 
+    - keyDotPath: (internal use only) JSON dot path to key (a.b.c)
+    - data: JSON object to merge with
+
+  Return: A JSON object with the data
+"""
+def GetObjectDataFromTfstate(tfstateObject, keysObject, keyDotPath="", data={}):
+  if isinstance(keysObject, dict):
+    for key in keysObject:
+      if not key in data: data[key] = {}
+      data[key] = GetObjectDataFromTfstate(tfstateObject, keysObject[key], f"{keyDotPath}{key}..", data[key])
+  elif isinstance(keysObject, list):
+    for key in keysObject:
+      if isinstance(key, str):
+        data[key] = GetJsonObjectValueByKeyDotPath(tfstateObject, f"$..{keyDotPath}{key}")
+      else:
+        data[key] = []
+        data[key] = GetObjectDataFromTfstate(tfstateObject, keysObject[key], f"{keyDotPath}{key}..", data[key])
+  return data
 
 """
   Function: CastValueToTerraformType
@@ -225,15 +221,70 @@ def ImportFromTfState():
   for line in importData.split("\n"):
     if line != "":
       [ a, resourceType, resourceName, d] = line.replace('"',"").split()
-      tfstateInstanceAttributes = FindResourceInstancesFromTfstate(terraformStateData, resourceType, resourceName)
+      tfstateInstanceAttributes = GetResourceInstancesFromTfstate(terraformStateData, resourceType, resourceName)
       terraformResourceData = f'{terraformResourceData}resource "{resourceType}" "{resourceName}" '
       if tfstateInstanceAttributes:
         for key in mappings[resourceType]:
+          if isinstance(key, dict):
+            tfstateJsonData = GetObjectDataFromTfstate(tfstateInstanceAttributes, key, data=tfstateJsonData)
+          else:
             tfstateJsonData[key] = CastValueToTerraformType(tfstateInstanceAttributes[key])
         terraformResourceData = f'{terraformResourceData}{json.dumps(tfstateJsonData, cls=TerraformEncoder)}'
       terraformResourceData = f'{terraformResourceData} \n\n'
-
   WriteTextToFile(TERRAFORM_RESOURCE_TF_FILE, terraformResourceData)
+
+"""
+  Function: CreateAzureImportFiles
+
+  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
+    the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
+    imported.
+"""
+def CreateAzureImportFiles():
+  data = LoadJsonFile(JSON_DATA_FILE)
+  importData=[]
+  terraformData=[]
+  for resource in data:
+    if PROVIDER_RESOURCE_TYPE in resource['name']:
+      if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
+        [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
+        TF_RESOURCE_NAME=GetValueFromKey(GetJsonObjectValueByKeyDotPath(resource, f"$..{jsonPath}" ), keyName)
+      else:
+        TF_RESOURCE_NAME=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
+      PROVIDER_RESOURCE_ID=resource['id']
+      importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
+      terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
+  WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
+  WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
+
+"""
+  Function: CreateAwsImportFiles
+
+  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
+    the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
+    imported.
+
+  TODO
+    - move JSON_DATA_FILE to cmd argument, 
+    - Changed the code to allow multiple providers. Swiched to a more robust lib to handle json dot paths.
+"""
+def CreateAwsImportFiles():
+  # data = LoadJsonFile(JSON_DATA_FILE)
+  data = LoadJsonFile("data/provider_aws_ec2.json")
+  # data = LoadJsonFile("data/provider_aws_efs.json")
+  importData=[]
+  terraformData=[]
+  for resource in data[PROVIDER_RESOURCE_ROOT]:
+    if re.search(r":", PROVIDER_RESOURCE_NAME_KEY):
+      [ jsonPath, keyName ] = PROVIDER_RESOURCE_NAME_KEY.split(":")
+      TF_RESOURCE_NAME=GetValueFromKey(GetJsonObjectValueByKeyDotPath(resource, f"$..{jsonPath}" ), keyName)
+    else:
+      TF_RESOURCE_NAME=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
+    PROVIDER_RESOURCE_ID=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_ID_KEY}")
+    importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
+    terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
+  WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
+  WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
 
 """
   Function: LoadConfig
