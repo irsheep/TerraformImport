@@ -294,7 +294,7 @@ def CreateAwsImportFiles():
 
   Description: Loads the configuration from 'settings.cgf'.
 """
-def LoadConfig(provider):
+def LoadConfig(provider=None):
   global JSON_DATA_FILE
   global TERRAFORM_IMPORT_SCRIPT
   global TERRAFORM_SKELETON_TF_FILE
@@ -309,6 +309,13 @@ def LoadConfig(provider):
   cfg = configparser.RawConfigParser()
   cfg.optionxform = lambda option: option # Prevent config parser from changing the CASE of variable names
   cfg.read('settings.cfg')
+
+  # If no provider is specified then return a list with the configured providers
+  if provider == None:
+    sections = cfg.sections()
+    sections.remove("Settings") # Discard the default "Settings" section
+    return sections
+
   # Common settings
   settings=dict(cfg.items("Settings"))
   for setting in settings:
@@ -320,6 +327,7 @@ def LoadConfig(provider):
     settings[setting]=settings[setting].split("#",1)[0].strip() # To get rid of inline comments
   globals().update(settings)  # Make them availible globally
 
+
 """
   Function: main
 
@@ -328,12 +336,16 @@ def LoadConfig(provider):
 
 """
 def main():
+
+  # Load the configure providers
+  configuredProviderList = LoadConfig()
+
+  # Define command line arguments
   parser = argparse.ArgumentParser(description='Import existing provider resources to Terraform')
-  parser.add_argument("-p", "--provider", choices=["aws", "azure", "gcp", "digitalocean"], required=True, help="")
+  parser.add_argument("-p", "--provider", choices=configuredProviderList, required=True, help="")
   group = parser.add_mutually_exclusive_group()
   group.add_argument("-c", "--create", action="store_true", help="Create 'terraform import' script and file for resources")
   group.add_argument("-m", "--merge", action="store_true", help=f"Merge properties from terraform state file to '{TERRAFORM_RESOURCE_TF_FILE}'")
-
   args = parser.parse_args()
 
   if args.provider:
