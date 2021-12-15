@@ -50,9 +50,9 @@ class TerraformHclEncoder(json.JSONEncoder):
     jsonEncodedString = json.JSONEncoder.encode(self, jsonObject)
     regex = re.compile(r"\"(.+)\"\s+\=\s(.*)")
     for line in jsonEncodedString.split("\n"):
-      if re.findall(r"^\s+\"\w+\"$", line): hclListSeperator=","
-      if re.findall(r"^\s+\]$", line): hclListSeperator=""
       line = regex.sub(r"\g<1> = \g<2>", line)
+      if re.findall(r"^\s+([\"\'])(?:\\.|[^\\])*?\1$", line): hclListSeperator=","
+      if re.findall(r"^\s+\]$", line): hclListSeperator=""
       terraformObjectString = f"{terraformObjectString}{line}{hclListSeperator}\n"
     return terraformObjectString.rstrip("\n")
 
@@ -247,14 +247,16 @@ def ImportFromTfState():
     if line != "":
       [ a, resourceType, resourceName, d] = line.replace('"',"").split()
       tfstateInstanceAttributes = GetResourceInstancesFromTfstate(terraformStateData, resourceType, resourceName)
-      terraformResourceData = f'{terraformResourceData}resource "{resourceType}" "{resourceName}" '
       if tfstateInstanceAttributes:
+        terraformResourceData = f'{terraformResourceData}resource "{resourceType}" "{resourceName}" '
         for key in mappings[resourceType]:
           if isinstance(key, dict):
             tfstateJsonData = GetObjectDataFromTfstate(tfstateInstanceAttributes, key, data=tfstateJsonData)
           else:
             tfstateJsonData[key] = CastValueToTerraformType(tfstateInstanceAttributes[key])
         terraformResourceData = f'{terraformResourceData}{json.dumps(tfstateJsonData, cls=TerraformHclEncoder)}'
+      else:
+        terraformResourceData = f'{terraformResourceData}resource "{resourceType}" "{resourceName}" {{}}'
       terraformResourceData = f'{terraformResourceData} \n\n'
   WriteTextToFile(TERRAFORM_RESOURCE_TF_FILE, terraformResourceData)
 
