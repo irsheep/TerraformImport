@@ -32,6 +32,8 @@ PROVIDER_RESOURCE_ID_KEY = None
 # Dot path to the resource name
 PROVIDER_RESOURCE_NAME_KEY = None
 
+ALLOW_DUPLICATE_IF_IN_TFSTATE=False
+
 """
    Class: TerraformEncoder
 
@@ -260,6 +262,11 @@ def ImportFromTfState():
       terraformResourceData = f'{terraformResourceData} \n\n'
   WriteTextToFile(TERRAFORM_RESOURCE_TF_FILE, terraformResourceData)
 
+def IsNewResourceInTfstate(needle, haystack):
+  if ALLOW_DUPLICATE_IF_IN_TFSTATE: return True
+  if re.search(f".*{needle}.*", haystack): return False
+  return True
+
 """
   Function: CreateAzureImportFiles
 
@@ -269,9 +276,10 @@ def ImportFromTfState():
 """
 def CreateImportFiles():
   data = LoadJsonFile(JSON_DATA_FILE)
+  tfstateData = LoadTextFile(TERRAFORM_STATE_FILE)
   importData=[]
   terraformData=[]
-
+  
   if PROVIDER_RESOURCE_ROOT == None:
     resourcesData = data
   else:
@@ -285,8 +293,9 @@ def CreateImportFiles():
       else:
         TF_RESOURCE_NAME=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_NAME_KEY}")
       PROVIDER_RESOURCE_ID=GetJsonObjectValueByKeyDotPath(resource, f"$..{PROVIDER_RESOURCE_ID_KEY}")
-      importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
-      terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
+      if IsNewResourceInTfstate(PROVIDER_RESOURCE_ID, tfstateData):
+        importData.append(f"terraform import {TERRAFORM_RESOURCE_TYPE}.{TF_RESOURCE_NAME} {PROVIDER_RESOURCE_ID}")
+        terraformData.append(f"resource \"{TERRAFORM_RESOURCE_TYPE}\" \"{TF_RESOURCE_NAME}\" {{}}\n")
   WriteArrayToFile(TERRAFORM_IMPORT_SCRIPT, importData)
   WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
 
@@ -341,21 +350,25 @@ def SetSettingValue(value:str):
     based on the arguments.
 """
 def main():
-
+  global ALLOW_DUPLICATE_IF_IN_TFSTATE
   # Load the configure providers
   configuredProviderList = LoadConfig()
 
   # Define command line arguments
-  parser = argparse.ArgumentParser(description='Import existing provider resources to Terraform')
+  parser = argparse.ArgumentParser(description='Import existing resources from a Cloud provider to Terraform')
   parser.add_argument("-p", "--provider", choices=configuredProviderList, required=True, help="")
   group = parser.add_mutually_exclusive_group()
-  group.add_argument("-c", "--create", action="store_true", help="Create 'terraform import' script and file for resources")
+
+  groupB = group.add_argument_group()
+  groupB.add_argument("-c", "--create", action="store_true", help="Create 'terraform import' script and file for resources")
+  groupB.add_argument("--include-all", action="store_true", help="Includes resources from the provider data file to the Terraform state file, even if they already exist")
   group.add_argument("-m", "--merge", action="store_true", help=f"Merge properties from terraform state file to '{TERRAFORM_RESOURCE_TF_FILE}'")
   args = parser.parse_args()
 
   if args.provider:
     LoadConfig(args.provider)
   if args.create:
+    if args.include_all: ALLOW_DUPLICATE_IF_IN_TFSTATE=True
     CreateImportFiles()
   elif args.merge:
     ImportFromTfState()
