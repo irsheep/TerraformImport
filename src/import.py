@@ -3,8 +3,9 @@
 import json
 import argparse
 import configparser
-from json.encoder import JSONEncoder
+import os.path
 import re
+from json.encoder import JSONEncoder
 from jsonpath_ng import jsonpath, parse
 
 # JSON data exported from the provider, for the resources to import
@@ -300,6 +301,48 @@ def CreateImportFiles():
   WriteArrayToFile(TERRAFORM_SKELETON_TF_FILE, terraformData)
 
 """
+  Function: PreFlightChecks
+
+  Description: Checks if the configuration file 'settings.cfg' is valid.
+
+  Retrun: True if the configuration is valid, or false if the configuration is invalid.
+"""
+def PreFlightChecks():
+  requiredSettings = [
+    {"var": JSON_DATA_FILE, "name":"JSON_DATA_FILE", "type": "file" },
+    {"var": TERRAFORM_STATE_FILE, "name":"TERRAFORM_STATE_FILE", "type": "file" },
+    {"var": TERRAFORM_MAPPING_FILE, "name":"TERRAFORM_MAPPING_FILE", "type": "file" },
+    {"var": TERRAFORM_RESOURCE_TYPE, "name":"TERRAFORM_RESOURCE_TYPE", "type": "string" },
+    {"var": PROVIDER_RESOURCE_ID_KEY, "name":"PROVIDER_RESOURCE_ID_KEY", "type": "string" },
+    {"var": PROVIDER_RESOURCE_NAME_KEY, "name":"PROVIDER_RESOURCE_NAME_KEY", "type": "string" },
+  ]
+
+  missingVariables = []
+  missingFiles = []
+
+  # Check if the requried settings are defined and if the requried files exist
+  for setting in requiredSettings:
+    if setting['var'] == None:
+      missingVariables.append(setting)
+    elif setting['type'] == 'file':
+      if not os.path.isfile(setting['var']): missingFiles.append(setting)
+
+  # Return true if no configuration issues found
+  if len(missingVariables) == 0 and len(missingFiles) == 0: return True
+
+  # Display an error message and return false
+  print("There are one or more configuration errors in settings.cfg.")
+  if len(missingVariables) > 0:
+    print("  One or more settings are missing:")
+    for setting in missingVariables:
+      print(f"    {setting['name']}")
+  if len(missingFiles) > 0:
+    print("  One or more files are missing:")
+    for setting in missingFiles:
+      print(f"    {setting['name']}: {setting['var']}")
+  return False
+
+"""
   Function: LoadConfig
 
   Description: Loads the configuration from 'settings.cgf'.
@@ -316,6 +359,11 @@ def LoadConfig(provider=None):
   global PROVIDER_RESOURCE_FILTER_VALUE
   global PROVIDER_RESOURCE_ID_KEY
   global PROVIDER_RESOURCE_NAME_KEY
+
+  # Exit the script if we can't find the settings file
+  if not os.path.isfile('settings.cfg'):
+    print("The configuration file 'settings.cfg' could not be found")
+    exit(1)
 
   cfg = configparser.RawConfigParser()
   cfg.optionxform = lambda option: option # Prevent config parser from changing the CASE of variable names
@@ -351,24 +399,30 @@ def SetSettingValue(value:str):
 """
 def main():
   global ALLOW_DUPLICATE_IF_IN_TFSTATE
-  # Load the configure providers
+
+  # Load the configuration
   configuredProviderList = LoadConfig()
 
   # Define command line arguments
   parser = argparse.ArgumentParser(description='Import existing resources from a Cloud provider to Terraform')
   parser.add_argument("-p", "--provider", choices=configuredProviderList, required=True, help="")
   group = parser.add_mutually_exclusive_group()
-
+  # TODO: the argument --include-all, should be exclusive to --create
   groupB = group.add_argument_group()
   groupB.add_argument("-c", "--create", action="store_true", help="Create 'terraform import' script and file for resources")
   groupB.add_argument("--include-all", action="store_true", help="Includes resources from the provider data file to the Terraform state file, even if they already exist")
   group.add_argument("-m", "--merge", action="store_true", help=f"Merge properties from terraform state file to '{TERRAFORM_RESOURCE_TF_FILE}'")
   args = parser.parse_args()
 
+  # Load and check the configuration for the selected provider
   if args.provider:
     LoadConfig(args.provider)
+    if not PreFlightChecks(): exit(0)
+
+  # Select the main action to run
   if args.create:
     if args.include_all: ALLOW_DUPLICATE_IF_IN_TFSTATE=True
+    print(ALLOW_DUPLICATE_IF_IN_TFSTATE)
     CreateImportFiles()
   elif args.merge:
     ImportFromTfState()
