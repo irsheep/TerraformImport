@@ -66,7 +66,7 @@ class TerraformHclEncoder(json.JSONEncoder):
 
   Parameters:
     - fileName: Path and name of the file to load
-  
+
   Return: A Dict with the data.
 """
 def LoadJsonFile(fileName):
@@ -81,7 +81,7 @@ def LoadJsonFile(fileName):
 
   Parameters:
     - fileName: Path and name of the file to load
-  
+
   Return: A the contents of the file.
 """
 def LoadTextFile(fileName):
@@ -92,7 +92,7 @@ def LoadTextFile(fileName):
 """
   Function: WriteArrayToFile
 
-  Description: Writes the contents of an array to a file, where each element is a new line, 
+  Description: Writes the contents of an array to a file, where each element is a new line,
     overwriting the contents of the file.
 
   Parameters:
@@ -197,7 +197,7 @@ def GetResourceInstancesFromTfstate(tfState, type, name):
 
   Parameters:
     - tfstateObject: The Terraform state object to look the 'keysObject'
-    - keysObejct: JSON object 
+    - keysObejct: JSON object
     - keyDotPath: (internal use only) JSON dot path to key (a.b.c)
     - data: JSON object to merge with
 
@@ -271,7 +271,7 @@ def IsNewResourceInTfstate(needle, haystack):
 """
   Function: CreateAzureImportFiles
 
-  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to 
+  Description: Creates a script with "terraform import <resource> <id>" command syntaxt to import the required resources to
     the Terraform state file and creates also a skeleton terraform (.tf) file with the resources that will be
     imported.
 """
@@ -280,7 +280,7 @@ def CreateImportFiles():
   tfstateData = LoadTextFile(TERRAFORM_STATE_FILE)
   importData=[]
   terraformData=[]
-  
+
   if PROVIDER_RESOURCE_ROOT == None:
     resourcesData = data
   else:
